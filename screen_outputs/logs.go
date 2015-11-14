@@ -3,13 +3,13 @@ package screen_outputs
 import (
   "fmt"
   "sort"
+  "math"
   "strings"
   "github.com/cloudfoundry/sonde-go/events"
   "github.com/cloudfoundry-community/firehose_inspector/pages"
   "github.com/cloudfoundry-community/firehose_inspector/utility"
   "github.com/nsf/termbox-go"
 )
-
 
 type LogLine struct {
   Line string
@@ -21,6 +21,8 @@ type LogsDisplay struct {
   MarginPos int
   LogOrigins map[string]bool
 
+  pagingMode bool
+  pagingOffset int
   lineBuffer []LogLine
   selectedOrigin int
   originKeys []string
@@ -29,7 +31,7 @@ type LogsDisplay struct {
   height int
 }
 
-func (r *LogsDisplay) padRight(s string, padStr string, overallLen int) string{
+func (r *LogsDisplay) padRight(s string, padStr string, overallLen int) string {
 	var padCountInt int
 	padCountInt = 1 + ((overallLen-len(padStr))/len(padStr))
 	var retStr =  s + strings.Repeat(padStr, padCountInt)
@@ -40,6 +42,8 @@ func (r *LogsDisplay) Init() {
   r.lineBuffer = []LogLine{}
   r.selectedOrigin = 0
   r.LogOrigins = make(map[string]bool)
+  r.pagingOffset = 0
+  r.pagingMode = false
 }
 
 func (r *LogsDisplay) Setup(page *pages.Page) {
@@ -62,19 +66,78 @@ func (r *LogsDisplay) Setup(page *pages.Page) {
 
 func (r *LogsDisplay) KeyEvent(key termbox.Key) {
 
-  if key == termbox.KeyArrowUp { if r.selectedOrigin > 0 { r.selectedOrigin -- } }
+  if key == termbox.KeyArrowUp {
+    if r.selectedOrigin > 0 {
+      r.selectedOrigin --
+
+      r.DrawOriginList()
+      termbox.Flush()
+    }
+  }
 
   if key == termbox.KeyArrowDown {
-    if r.selectedOrigin < (len(r.originKeys) - 1) { r.selectedOrigin ++ }
+    if r.selectedOrigin < (len(r.originKeys) - 1) {
+      r.selectedOrigin ++
+
+      r.DrawOriginList()
+      termbox.Flush()
+    }
   }
 
   if key == termbox.KeySpace {
     originKey := r.originKeys[r.selectedOrigin]
     r.LogOrigins[originKey] = !r.LogOrigins[originKey]
+
+    r.DrawOriginList()
+    termbox.Flush()
   }
 
-  r.DrawOriginList()
-  termbox.Flush()
+  if key == termbox.KeyEsc {
+    r.pagingMode = false
+
+    r.DrawLogBuffer()
+    termbox.Flush()
+  }
+
+  if key == termbox.KeyPgdn {
+
+    // subtract half a screen height
+    visualBufferHeight := r.height - 5
+    change := (visualBufferHeight / 2)
+
+    if (len(r.lineBuffer) < visualBufferHeight) { return }
+
+    r.pagingOffset += change
+
+    if r.pagingOffset > (len(r.lineBuffer) - visualBufferHeight) {
+      r.pagingOffset = (len(r.lineBuffer) - visualBufferHeight)
+    }
+
+    r.DrawLogBuffer()
+    termbox.Flush()
+  }
+
+  if key == termbox.KeyPgup {
+    visualBufferHeight := r.height - 5
+    change := (visualBufferHeight / 2)
+
+    if (len(r.lineBuffer) < visualBufferHeight) { return }
+
+    if !r.pagingMode {
+      r.pagingOffset = len(r.lineBuffer) - visualBufferHeight
+      r.pagingMode = true
+    }
+
+    r.pagingOffset -= change
+
+    if r.pagingOffset < 1 {
+      r.pagingOffset = 0
+    }
+
+    r.DrawLogBuffer()
+    termbox.Flush()
+  }
+
 }
 
 func (r *LogsDisplay) DrawOriginList() {
@@ -117,21 +180,24 @@ func (r *LogsDisplay) GetLinesFromLogBytes(logBytes []byte) []string {
 func (r *LogsDisplay) DrawLogBuffer() {
   utility.WipeArea(r.MarginPos + 1, 3, r.width, r.height - 2, r.page.Foreground, r.page.Background)
 
-  bufferStart := 3
-  bufferEnd := r.height - 2
+  paneStart := 3
+  paneEnd := r.height - 2  // height in rows of the screen
 
-  if len(r.lineBuffer) < (bufferEnd - bufferStart) {
-    bufferStart = bufferEnd - len(r.lineBuffer)
+  if len(r.lineBuffer) < (paneEnd - paneStart) {  // adjust for length of the buffer
+    paneStart = paneEnd - len(r.lineBuffer)
   }
 
-  offset := len(r.lineBuffer) - (bufferEnd - bufferStart)
+  offset := len(r.lineBuffer) - (paneEnd - paneStart)
 
-  for i := bufferEnd; i > bufferStart; i-- {
-    line := r.lineBuffer[(i - bufferStart) + offset - 1]
+  if r.pagingMode {
+    offset = r.pagingOffset
+  }
+
+  // look at
+  for i := paneEnd; i > paneStart; i-- {
+    line := r.lineBuffer[(i - paneStart) + offset - 1]
 
     cursor := r.MarginPos + 1
-
-    fmt.Printf("%d - %v : %s\n", len(line.Line), line.Indent, line.Source)
 
     if line.Source != "" {
       source := fmt.Sprintf("[%s] ", line.Source)
@@ -145,6 +211,16 @@ func (r *LogsDisplay) DrawLogBuffer() {
     }
 
     utility.WriteString(line.Line, cursor, i - 1, r.page.Foreground, r.page.Background)
+  }
+
+  if r.pagingMode {
+    numberOfPages := math.Ceil(float64(len(r.lineBuffer)) / float64(r.height - 5))
+    currentPage := math.Ceil(float64(r.pagingOffset) / float64(r.height - 5) + 1)
+
+    // offSetIndicator := fmt.Sprintf(" %d / %d ", r.pagingOffset, len(r.lineBuffer))
+    offSetIndicator := fmt.Sprintf(" %d / %d ", int(currentPage), int(numberOfPages))
+    x := r.width - len(offSetIndicator)
+    utility.WriteString(offSetIndicator, x, paneStart, r.page.Foreground, termbox.ColorRed)
   }
 }
 
@@ -184,7 +260,6 @@ func (r *LogsDisplay) Update(env *events.Envelope) {
 
   // split to screen_width
   for _, line := range lines {
-    fmt.Printf("%s\n--------------\n", line)
     for _, croppedLine := range utility.SplitString(line, displayLineWidth - 10) {
       croppedLines = append(croppedLines, croppedLine)
     }

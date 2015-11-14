@@ -120,7 +120,7 @@ func (fi *FirehoseInspector) Run(cliConnection plugin.CliConnection, args []stri
           output.KeyEvent(ev.Key)
         }
   			switch ev.Key {
-  			case termbox.KeyEsc:
+  			case termbox.KeyCtrlC:
   				break loop
   			case termbox.KeyF1:
           fi.ChangePage(0)
@@ -181,8 +181,8 @@ func fatalIf(err error) {
 
 func main() {
 
-  logOut, _ := os.OpenFile("/tmp/firehose.stdout.log", os.O_WRONLY | os.O_CREATE | os.O_SYNC, 0755)
-  logErr, _ := os.OpenFile("/tmp/firehose.stderr.log", os.O_WRONLY | os.O_CREATE | os.O_SYNC, 0755)
+  logOut, _ := os.OpenFile("/tmp/firehose.stdout.log", os.O_WRONLY | os.O_APPEND | os.O_SYNC, 0755)
+  logErr, _ := os.OpenFile("/tmp/firehose.stderr.log", os.O_WRONLY | os.O_APPEND | os.O_SYNC, 0755)
 	os.Stdout = logOut;
 	os.Stderr = logErr;
 
